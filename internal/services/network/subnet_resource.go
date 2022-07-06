@@ -83,6 +83,11 @@ func resourceSubnet() *pluginsdk.Resource {
 				},
 			},
 
+			"security_group": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
 			"delegation": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
@@ -225,6 +230,13 @@ func resourceSubnetCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	delegationsRaw := d.Get("delegation").([]interface{})
 	properties.Delegations = expandSubnetDelegation(delegationsRaw)
 
+	secGroup := d.Get("security_group").(string)
+	if secGroup != "" {
+		properties.NetworkSecurityGroup = &network.SecurityGroup{
+			ID: &secGroup,
+		}
+	}
+
 	subnet := network.Subnet{
 		Name:                   utils.String(id.Name),
 		SubnetPropertiesFormat: &properties,
@@ -340,6 +352,17 @@ func resourceSubnetUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 		props.ServiceEndpointPolicies = expandSubnetServiceEndpointPolicies(serviceEndpointPoliciesRaw)
 	}
 
+	if d.HasChange("security_group") {
+		secGroup := d.Get("security_group").(string)
+		if secGroup != "" {
+			props.NetworkSecurityGroup = &network.SecurityGroup{
+				ID: &secGroup,
+			}
+		} else {
+			props.NetworkSecurityGroup = nil
+		}
+	}
+
 	subnet := network.Subnet{
 		Name:                   utils.String(id.Name),
 		SubnetPropertiesFormat: &props,
@@ -416,6 +439,10 @@ func resourceSubnetRead(d *pluginsdk.ResourceData, meta interface{}) error {
 			d.Set("address_prefixes", props.AddressPrefixes)
 		}
 
+		if props.NetworkSecurityGroup != nil && props.NetworkSecurityGroup.ID != nil {
+			d.Set("security_group", props.NetworkSecurityGroup.ID)
+		}
+
 		delegation := flattenSubnetDelegation(props.Delegations)
 		if err := d.Set("delegation", delegation); err != nil {
 			return fmt.Errorf("flattening `delegation`: %+v", err)
@@ -453,6 +480,17 @@ func resourceSubnetDelete(d *pluginsdk.ResourceData, meta interface{}) error {
 
 	locks.ByName(id.Name, SubnetResourceName)
 	defer locks.UnlockByName(id.Name, SubnetResourceName)
+
+	// TODO: are NSG locks needed here?
+	secGroup := d.Get("security_group").(string)
+	if secGroup != "" {
+		parsedNsgID, err := parse.NetworkSecurityGroupID(secGroup)
+		if err != nil {
+			return err
+		}
+		locks.ByName(parsedNsgID.Name, networkSecurityGroupResourceName)
+		defer locks.UnlockByName(parsedNsgID.Name, networkSecurityGroupResourceName)
+	}
 
 	future, err := client.Delete(ctx, id.ResourceGroup, id.VirtualNetworkName, id.Name)
 	if err != nil {
